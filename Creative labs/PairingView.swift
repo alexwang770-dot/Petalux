@@ -42,7 +42,7 @@ struct PairingView: View {
                 Circle()
                     .fill(Color.ptPinkLight.opacity(0.5))
                     .frame(width: 220, height: 220)
-                FlowerView(isOpen: true, ledColor: .orange, onTap: {})
+                FlowerView(isOpen: true, onTap: {})
                     .scaleEffect(1.5)
                     .frame(width: 220, height: 220)
                     .clipped()

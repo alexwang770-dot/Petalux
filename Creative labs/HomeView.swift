@@ -48,8 +48,7 @@ struct HomeView: View {
             // Flower illustration (right-aligned, large)
             GeometryReader { geo in
                 FlowerView(
-                    isOpen: ble.lampState.isOpen,
-                    ledColor: ble.lampState.color.swiftUIColor
+                    isOpen: ble.lampState.isOpen
                 ) {
                     ble.send(ble.lampState.isOpen
                         ? .bloomClose(speed: 3)
@@ -127,6 +126,7 @@ struct HomeView: View {
             .background((ble.lampState.isOpen ? Color.ptSage : Color.ptPinkDeep).opacity(0.1))
             .cornerRadius(20)
             .padding(.top, 6)
+            
         }
         .padding(.horizontal, 28)
         .padding(.top, 16)

@@ -17,6 +17,12 @@ enum PetaLuxUUID {
 struct LampState: Equatable {
     var isOpen: Bool = false
     var color: Color3 = Color3(r: 255, g: 120, b: 0)
+    var isMusicPlaying: Bool = false
+    var currentSound: String?
+
+    var isLightOn: Bool {
+        return !(color.r == 0 && color.g == 0 && color.b == 0)
+    }
 }
 
 struct Color3: Equatable {
@@ -42,6 +48,8 @@ enum LampCommand {
     case scheduleSet(time: String)   // "HH:MM"
     case scheduleClear
     case statusGet
+    case musicPlay(sound: String)
+    case musicStop
 
     var payload: Data {
         let dict: [String: Any]
@@ -55,6 +63,8 @@ enum LampCommand {
         case .scheduleSet(let t):     dict = ["cmd": "SCHEDULE_SET",   "time": t]
         case .scheduleClear:          dict = ["cmd": "SCHEDULE_CLEAR"]
         case .statusGet:              dict = ["cmd": "STATUS_GET"]
+        case .musicPlay(let sound):   dict = ["cmd": "MUSIC_PLAY",     "sound": sound]
+        case .musicStop:              dict = ["cmd": "MUSIC_STOP"]
         }
         return (try? JSONSerialization.data(withJSONObject: dict)) ?? Data()
     }
@@ -87,6 +97,7 @@ final class BLEManager: NSObject, ObservableObject {
     @Published var connectionState: ConnectionState = .disconnected
     @Published var lampState = LampState()
     @Published var logEntries: [BLELogEntry] = []
+    @Published var isCommandReady = false
 
     enum ConnectionState: Equatable {
         case disconnected
@@ -102,9 +113,11 @@ final class BLEManager: NSObject, ObservableObject {
     private var commandChar: CBCharacteristic?
     private var stateChar: CBCharacteristic?
 
+    private let bleQueue = DispatchQueue(label: "com.petalux.ble", qos: .userInitiated)
+
     override init() {
         super.init()
-        centralManager = CBCentralManager(delegate: self, queue: .main)
+        centralManager = CBCentralManager(delegate: self, queue: bleQueue)
     }
 
     // MARK: - Public API
@@ -124,10 +137,16 @@ final class BLEManager: NSObject, ObservableObject {
         centralManager.cancelPeripheralConnection(p)
     }
 
-    func send(_ command: LampCommand) {
-        guard let p = peripheral, let char = commandChar else { return }
+    @discardableResult
+    func send(_ command: LampCommand) -> Bool {
+        guard let p = peripheral, let char = commandChar else {
+            log(.system, "Cannot send command - COMMAND characteristic is not available")
+            return false
+        }
         log(.tx, "COMMAND \(command.logString)")
         p.writeValue(command.payload, for: char, type: .withResponse)
+        applyLocalState(for: command)
+        return true
     }
 
     // MARK: - Private
@@ -158,18 +177,48 @@ final class BLEManager: NSObject, ObservableObject {
         send(.statusGet)
     }
 
+    private func applyLocalState(for command: LampCommand) {
+        var updated = lampState
+
+        switch command {
+        case .musicPlay(let sound):
+            updated.isMusicPlaying = true
+            updated.currentSound = sound
+        case .musicStop:
+            updated.isMusicPlaying = false
+        default:
+            return
+        }
+
+        lampState = updated
+    }
+
     private func parseState(_ data: Data) {
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
         let logStr = String(data: data, encoding: .utf8) ?? ""
         log(.rx, "STATE \(logStr)")
-        if let open = json["open"] as? Bool { lampState.isOpen = open }
+        
+        // Re-assign the whole struct so @Published fires reliably
+        var updated = lampState
+        
+        if let open = json["open"] as? Bool {
+            updated.isOpen = open
+        }
         if let color = json["color"] as? [Int], color.count == 3 {
-            lampState.color = Color3(
+            updated.color = Color3(
                 r: UInt8(clamping: color[0]),
                 g: UInt8(clamping: color[1]),
                 b: UInt8(clamping: color[2])
             )
         }
+        if let playing = json["musicPlaying"] as? Bool {
+            updated.isMusicPlaying = playing
+        }
+        if let sound = (json["sound"] as? String) ?? (json["musicTrack"] as? String) {
+            updated.currentSound = sound
+        }
+
+        lampState = updated   // ← this line makes the UI update instantly
     }
 
     private func log(_ direction: BLELogEntry.Direction, _ message: String) {
@@ -220,6 +269,7 @@ extension BLEManager: CBCentralManagerDelegate {
             self.timeSyncChar = nil
             self.commandChar  = nil
             self.stateChar    = nil
+            self.isCommandReady = false
             self.log(.system, "Disconnected")
         }
     }
@@ -238,6 +288,11 @@ extension BLEManager: CBPeripheralDelegate {
     nonisolated func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
         Task { @MainActor in
             guard let service = peripheral.services?.first(where: { $0.uuid == PetaLuxUUID.service }) else { return }
+            self.timeSyncChar = nil
+            self.commandChar = nil
+            self.stateChar = nil
+            self.isCommandReady = false
+
             peripheral.discoverCharacteristics(
                 [PetaLuxUUID.timeSync, PetaLuxUUID.command, PetaLuxUUID.state],
                 for: service
@@ -250,7 +305,9 @@ extension BLEManager: CBPeripheralDelegate {
             for char in service.characteristics ?? [] {
                 switch char.uuid {
                 case PetaLuxUUID.timeSync: self.timeSyncChar = char
-                case PetaLuxUUID.command:  self.commandChar  = char
+                case PetaLuxUUID.command:
+                    self.commandChar = char
+                    self.isCommandReady = true
                 case PetaLuxUUID.state:
                     self.stateChar = char
                     peripheral.setNotifyValue(true, for: char)
@@ -263,7 +320,13 @@ extension BLEManager: CBPeripheralDelegate {
             if let stateChar = self.stateChar {
                 peripheral.readValue(for: stateChar)
             }
-            self.log(.system, "Ready - subscribed to STATE notifications")
+            if self.commandChar == nil {
+                self.log(.system, "COMMAND characteristic not found - controls are unavailable")
+            }
+            if self.stateChar == nil {
+                self.log(.system, "STATE characteristic not found - live state is unavailable")
+            }
+            self.log(.system, "Ready")
         }
     }
 

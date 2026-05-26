@@ -27,7 +27,6 @@ struct PetalShape: Shape {
 
 struct FlowerView: View {
     let isOpen: Bool
-    let ledColor: Color
     let onTap: () -> Void
 
     private let petalCount = 6
@@ -95,8 +94,8 @@ struct FlowerView: View {
     ZStack {
         Color(red: 0.08, green: 0.06, blue: 0.03).ignoresSafeArea()
         VStack(spacing: 32) {
-            FlowerView(isOpen: true,  ledColor: .orange, onTap: {})
-            FlowerView(isOpen: false, ledColor: .blue,   onTap: {})
+            FlowerView(isOpen: true,  onTap: {})
+            FlowerView(isOpen: false, onTap: {})
         }
     }
 }

@@ -2,6 +2,9 @@ import SwiftUI
 
 @main
 struct PetaLuxApp: App {
+    init() {
+        print("🌸 App launched")  // add this
+    }
     var body: some Scene {
         WindowGroup {
             RootView()
